@@ -3,75 +3,115 @@
 
 ESP32QRCodeReader reader(CAMERA_MODEL_AI_THINKER);
 
-// Переменные для отслеживания позиции QR-кода
-int lastDetectedX = -1;
-int lastDetectedY = -1;
-unsigned long lastDetectionTime = 0;
+// Структура для хранения информации о QR-коде
+struct QRCodeInfo {
+    int x;
+    int y;
+    unsigned long timestamp;
+    String payload;
+    bool isValid;
+} lastQRCode;
+
+// Константы
+const int TASK_STACK_SIZE = 8 * 1024;  // Увеличиваем размер стека
+const int SCAN_INTERVAL = 50;          // Уменьшаем интервал сканирования
+const int FRAME_WIDTH = 640;
+const int FRAME_HEIGHT = 480;
+
+// Настройки камеры
+void setupCamera() {
+    sensor_t * s = esp_camera_sensor_get();
+    if (s) {
+        s->set_brightness(s, 1);     // Увеличиваем яркость (-2 to 2)
+        s->set_contrast(s, 1);       // Увеличиваем контраст (-2 to 2)
+        s->set_saturation(s, 0);     // Нормальная насыщенность (-2 to 2)
+        s->set_whitebal(s, 1);       // Включаем автоматический баланс белого
+        s->set_exposure_ctrl(s, 1);  // Включаем автоматическую экспозицию
+        s->set_gainceiling(s, GAINCEILING_2X); // Устанавливаем усиление
+    }
+}
 
 void onQrCodeTask(void *pvParameters)
 {
-  struct QRCodeData qrCodeData;
-  int frameCount = 0;
+    struct QRCodeData qrCodeData;
+    unsigned long lastScanTime = 0;
+    int consecutiveFailures = 0;
+    const int MAX_FAILURES = 10;
 
-  while (true)
-  {
-    frameCount++;
-    if (reader.receiveQrCode(&qrCodeData, 100))
+    while (true)
     {
-      Serial.println("Found QRCode");
-      if (qrCodeData.valid)
-      {
-        // Обновляем время последнего обнаружения
-        lastDetectionTime = millis();
+        unsigned long currentTime = millis();
         
-        // Примерная оценка положения на основе времени обнаружения
-        lastDetectedX = (frameCount * 13) % 640; // Примерная X координата
-        lastDetectedY = (frameCount * 17) % 480; // Примерная Y координата
-        
-        Serial.print("Payload: ");
-        Serial.println((const char *)qrCodeData.payload);
-        
-        // Выводим примерное положение
-        Serial.print("Approximate position: X=");
-        Serial.print(lastDetectedX);
-        Serial.print(", Y=");
-        Serial.print(lastDetectedY);
-        Serial.print(" (Frame: ");
-        Serial.print(frameCount);
-        Serial.println(")");
-        
-        // Выводим время с момента запуска
-        Serial.print("Detection time: ");
-        Serial.print(lastDetectionTime);
-        Serial.println(" ms");
-      }
-      else
-      {
-        Serial.print("Invalid QR Code at frame ");
-        Serial.println(frameCount);
-      }
+        if (currentTime - lastScanTime >= SCAN_INTERVAL)
+        {
+            lastScanTime = currentTime;
+
+            if (reader.receiveQrCode(&qrCodeData, SCAN_INTERVAL))
+            {
+                if (qrCodeData.valid)
+                {
+                    consecutiveFailures = 0;
+                    
+                    lastQRCode.timestamp = currentTime;
+                    lastQRCode.payload = String((char *)qrCodeData.payload);
+                    lastQRCode.isValid = true;
+                    
+                    lastQRCode.x = FRAME_WIDTH / 2;
+                    lastQRCode.y = FRAME_HEIGHT / 2;
+
+                    Serial.printf("QR Code detected\n");
+                    Serial.printf("Payload: %s\n", lastQRCode.payload.c_str());
+                    Serial.printf("Time: %lu ms\n", lastQRCode.timestamp);
+                }
+                else
+                {
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= MAX_FAILURES) {
+                        ESP_LOGI("QR", "Too many failures, reinitializing camera...");
+                        reader.begin();
+                        setupCamera();
+                        consecutiveFailures = 0;
+                    }
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-  }
 }
 
 void setup()
 {
-  Serial.begin(115200);
-  Serial.println();
+    Serial.begin(115200);
+    Serial.println("Initializing QR Code Reader...");
 
-  reader.setup();
+    // Инициализация структуры
+    lastQRCode.x = -1;
+    lastQRCode.y = -1;
+    lastQRCode.timestamp = 0;
+    lastQRCode.isValid = false;
 
-  Serial.println("Setup QRCode Reader");
+    // Настройка камеры
+    reader.setup();
+    setupCamera();
+    
+    // Запуск на втором ядре
+    reader.beginOnCore(1);
+    
+    // Создание задачи с увеличенным размером стека
+    xTaskCreate(
+        onQrCodeTask,
+        "onQrCode",
+        TASK_STACK_SIZE,
+        NULL,
+        4,  // Высокий приоритет
+        NULL
+    );
 
-  reader.beginOnCore(1);
-
-  Serial.println("Begin on Core 1");
-
-  xTaskCreate(onQrCodeTask, "onQrCode", 4 * 1024, NULL, 4, NULL);
+    Serial.println("Setup completed!");
 }
 
 void loop()
 {
-  delay(100);
+    // Основной цикл может использоваться для других задач
+    delay(100);
 }

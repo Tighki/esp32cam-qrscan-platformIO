@@ -59,9 +59,11 @@ void onQrCodeTask(void *pvParameters)
                     lastQRCode.x = FRAME_WIDTH / 2;
                     lastQRCode.y = FRAME_HEIGHT / 2;
 
-                    Serial.printf("QR Code detected\n");
+                    Serial.println("QR Code detected:");
+                    Serial.printf("Position: X=%d, Y=%d\n", lastQRCode.x, lastQRCode.y);
                     Serial.printf("Payload: %s\n", lastQRCode.payload.c_str());
                     Serial.printf("Time: %lu ms\n", lastQRCode.timestamp);
+                    Serial.println("------------------------");
                 }
                 else
                 {
